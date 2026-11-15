@@ -1,222 +1,177 @@
-let i: number;
-//  ============================================================
-//  MicroSLM 1.0
-//  Small Language Model
-//  Microsoft MakeCode Python
-//  BBC micro:bit V2
-//  ============================================================
-let ALPHABET = "abcdefghijklmnopqrstuvwxyz .,!?'-"
-let VOCAB = ALPHABET.length
-let CONTEXTS = 64
-let MAX_COUNT = 250
-let GEN_LENGTH = 80
-let STARTER_TEXT = "hello there. the little robot is learning to talk. it reads text and predicts what character comes next. a small language model learns patterns from examples. the quick brown fox jumps over the lazy dog. once upon a time a curious mouse explored a quiet forest. the mouse found a tiny house beside a river. the sun was bright and the birds were singing. machines can learn from data and generate new sentences. learning takes practice patience and many examples. the robot likes science computers and making things. the world is full of interesting ideas and questions. a tiny computer can learn simple patterns. the machine studies language and predicts the future. "
-//  ============================================================
-//  MODEL STORAGE
-//  ============================================================
-let counts = []
-for (i = 0; i < CONTEXTS * VOCAB; i++) {
-    counts.push(0)
-}
-let trained = [0]
-//  ============================================================
-//  TOKENIZER
-//  ============================================================
-function char_index(ch: string): number {
-    return ALPHABET.indexOf(ch.toLowerCase()) >= 0 ? ALPHABET.indexOf(ch.toLowerCase()) : ALPHABET.indexOf(" ")
-}
+// MicroSLM — single-file MakeCode program for BBC micro:bit V2
+// Paste this entire file into the MakeCode JavaScript editor.
+//
+// Serial commands (USB serial, newline terminated):
+//   GEN the little robot       Generate text from a prompt
+//   LEARN the little robot ... Add text to the model's training counts
+//   RESET                       Reset to the built-in training corpus
+//   HELP                        Show commands
+//
+// This is a compact character-level bigram statistical language model.
+// It learns transition frequencies from text and samples the next character.
+// It is not a neural network.
 
-function normalize_char(ch: string): string {
-    return ALPHABET.charAt(char_index(ch))
-}
+const ALPHABET = "abcdefghijklmnopqrstuvwxyz "
+const VOCAB = 27
+const MAX_OUTPUT = 120
+const STARTER_TEXT =
+    "the little robot is learning to speak. " +
+    "the robot can read and write words. " +
+    "once upon a time there was a tiny machine. " +
+    "the machine learned from examples. " +
+    "learning takes practice and patience. " +
+    "the quick brown fox jumps over the lazy dog. " +
+    "hello world. " +
+    "the small model predicts the next character. " +
+    "the curious mouse explored the forest. " +
+    "it found a little house near the river. " +
+    "the sun is shining and the birds are singing. " +
+    "machines learn patterns from data. " +
+    "the world is full of interesting things. "
 
-function get_context(a: string, b: string): number {
-    return (char_index(a) * VOCAB + char_index(b)) % CONTEXTS
-}
+// counts[previous character][next character]
+let counts: number[] = []
+let trainedCharacters = 0
 
-//  ============================================================
-//  TRAINING
-//  ============================================================
-function reset_model() {
-    for (let i = 0; i < counts.length; i++) {
-        counts[i] = 0
+function charIndex(ch: string): number {
+    ch = ch.toLowerCase()
+    let i = ALPHABET.indexOf(ch)
+    if (i < 0) {
+        return ALPHABET.indexOf(" ")
     }
-    trained[0] = 0
+    return i
 }
 
-function learn(text: string) {
-    let ch: string;
-    let context: number;
-    let next_char: number;
-    let index: number;
+function clearModel(): void {
+    counts = []
+    for (let i = 0; i < VOCAB * VOCAB; i++) {
+        counts.push(0)
+    }
+    trainedCharacters = 0
+}
+
+function learn(text: string): void {
     text = text.toLowerCase()
-    let a = " "
-    let b = " "
-    for (let i = 0; i < text.length; i++) {
-        ch = normalize_char(text.charAt(i))
-        context = get_context(a, b)
-        next_char = char_index(ch)
-        index = context * VOCAB + next_char
-        if (counts[index] < MAX_COUNT) {
+    if (text.length < 2) {
+        return
+    }
+
+    for (let i = 0; i < text.length - 1; i++) {
+        let a = charIndex(text.charAt(i))
+        let b = charIndex(text.charAt(i + 1))
+        let index = a * VOCAB + b
+
+        // Saturate counts to avoid integer overflow.
+        if (counts[index] < 250) {
             counts[index] = counts[index] + 1
         }
-        
-        trained[0] = trained[0] + 1
-        a = b
-        b = ch
+        trainedCharacters++
     }
 }
 
-function train() {
-    reset_model()
+function trainStarterModel(): void {
+    clearModel()
     learn(STARTER_TEXT)
 }
 
-//  ============================================================
-//  NEXT CHARACTER PREDICTION
-//  ============================================================
-function predict(a: string, b: string): string {
-    let i: number;
-    let context = get_context(a, b)
-    let row = context * VOCAB
+function predictNext(previous: string): string {
+    let row = charIndex(previous) * VOCAB
     let total = 0
-    for (i = 0; i < VOCAB; i++) {
-        total = total + counts[row + i]
+
+    for (let i = 0; i < VOCAB; i++) {
+        total += counts[row + i]
     }
+
+    // If this context has not been seen, choose a random letter/space.
     if (total == 0) {
         return ALPHABET.charAt(Math.randomRange(0, VOCAB - 1))
     }
-    
-    //  Weighted random sampling
+
     let pick = Math.randomRange(1, total)
-    for (i = 0; i < VOCAB; i++) {
-        pick = pick - counts[row + i]
+    for (let i = 0; i < VOCAB; i++) {
+        pick -= counts[row + i]
         if (pick <= 0) {
             return ALPHABET.charAt(i)
         }
-        
     }
+
     return " "
 }
 
-//  ============================================================
-//  TEXT GENERATION
-//  ============================================================
-function generate(prompt: string, amount: number): string {
-    let i: number;
-    let ch: string;
-    let next_char: string;
+function generate(prompt: string, length: number): string {
     prompt = prompt.toLowerCase()
-    let a = " "
-    let b = " "
-    let output = ""
-    for (i = 0; i < prompt.length; i++) {
-        ch = normalize_char(prompt.charAt(i))
-        output = output + ch
-        a = b
-        b = ch
+    if (prompt.length == 0) {
+        prompt = "the "
     }
-    if (output == "") {
-        output = "the "
-        a = "h"
-        b = " "
-    }
-    
-    for (i = 0; i < amount; i++) {
-        next_char = predict(a, b)
-        output = output + next_char
-        a = b
-        b = next_char
+
+    let output = prompt
+    let previous = prompt.charAt(prompt.length - 1)
+
+    for (let i = 0; i < length; i++) {
+        let next = predictNext(previous)
+        output = output + next
+        previous = next
     }
     return output
 }
 
-//  ============================================================
-//  SERIAL INTERFACE
-//  ============================================================
-function show_help() {
+function showHelp(): void {
     serial.writeLine("")
-    serial.writeLine("=== MicroSLM ===")
-    serial.writeLine("GEN prompt")
-    serial.writeLine("LEARN text")
+    serial.writeLine("MicroSLM MakeCode")
+    serial.writeLine("Commands:")
+    serial.writeLine("GEN your prompt")
+    serial.writeLine("LEARN text to learn")
     serial.writeLine("RESET")
-    serial.writeLine("INFO")
     serial.writeLine("HELP")
+    serial.writeLine("Vocabulary: lowercase a-z and space")
     serial.writeLine("")
 }
 
-function handle_command(line: string) {
-    let text: string;
-    let prompt: string;
-    let result: string;
-    line = line.replace("\r", "")
-    line = line.replace("\n", "")
+function handleCommand(line: string): void {
+    line = line.trim()
     if (line.length == 0) {
         return
     }
-    
-    let upper = line.toUpperCase()
-    if (upper == "HELP") {
-        show_help()
-    } else if (upper == "INFO") {
-        serial.writeLine("MicroSLM 1.0")
-        serial.writeLine("Model: hashed trigram")
-        serial.writeLine("Vocabulary: " + ("" + VOCAB))
-        serial.writeLine("Contexts: " + ("" + CONTEXTS))
-        serial.writeLine("Training transitions: " + ("" + trained[0]))
-    } else if (upper == "RESET") {
-        train()
-        serial.writeLine("Model reset.")
-        serial.writeLine("Starter training complete.")
-    } else if (upper.substr(0, 6) == "LEARN ") {
-        text = line.substr(6, line.length - 6)
+
+    if (line.toUpperCase() == "HELP") {
+        showHelp()
+    } else if (line.toUpperCase() == "RESET") {
+        trainStarterModel()
+        serial.writeLine("Model reset to starter corpus.")
+    } else if (line.toUpperCase().substr(0, 6) == "LEARN ") {
+        let text = line.substr(6)
         learn(text)
-        serial.writeLine("Learned new text.")
-        serial.writeLine("Transitions: " + ("" + trained[0]))
-    } else if (upper.substr(0, 4) == "GEN ") {
-        prompt = line.substr(4, line.length - 4)
-        result = generate(prompt, GEN_LENGTH)
-        serial.writeLine(result)
+        serial.writeLine("Learned text. Training transitions: " + trainedCharacters)
+    } else if (line.toUpperCase().substr(0, 4) == "GEN ") {
+        let prompt = line.substr(4)
+        serial.writeLine(generate(prompt, MAX_OUTPUT))
     } else {
-        result = generate(line, GEN_LENGTH)
-        serial.writeLine(result)
+        // Treat an unprefixed line as a generation prompt.
+        serial.writeLine(generate(line, MAX_OUTPUT))
     }
-    
 }
 
-//  ============================================================
-//  BUTTON CONTROLS
-//  ============================================================
-//  ============================================================
-//  STARTUP
-//  ============================================================
+basic.showIcon(IconNames.SmallDiamond)
 serial.redirectToUSB()
 serial.setBaudRate(BaudRate.BaudRate115200)
-train()
+
+trainStarterModel()
+
 serial.writeLine("")
-serial.writeLine("========================")
-serial.writeLine("MicroSLM 1.0")
-serial.writeLine("MakeCode Python")
-serial.writeLine("micro:bit V2 ready")
-serial.writeLine("========================")
+serial.writeLine("MicroSLM ready — micro:bit V2")
 serial.writeLine("Type HELP for commands.")
-serial.writeLine("Training: " + ("" + trained[0]))
-serial.onDataReceived(serial.delimiters(Delimiters.NewLine), function serial_received() {
+serial.writeLine("Starter transitions: " + trainedCharacters)
+
+serial.onDataReceived(serial.delimiters(Delimiters.NewLine), function () {
     let line = serial.readUntil(serial.delimiters(Delimiters.NewLine))
-    handle_command(line)
+    handleCommand(line)
 })
-input.onButtonPressed(Button.A, function button_a() {
-    let result = generate("the ", 40)
-    serial.writeLine(result)
-    basic.showIcon(IconNames.Happy)
+
+input.onButtonPressed(Button.A, function () {
+    let result = generate("the ", 24)
+    basic.showString(result)
 })
-input.onButtonPressed(Button.B, function button_b() {
-    serial.writeLine("Training transitions: " + ("" + trained[0]))
-    basic.showNumber(trained[0] % 10000)
+
+input.onButtonPressed(Button.B, function () {
+    basic.showNumber(trainedCharacters)
 })
-input.onButtonPressed(Button.AB, function button_ab() {
-    train()
-    serial.writeLine("Model reset.")
-    basic.showIcon(IconNames.Yes)
-})
-basic.showIcon(IconNames.SmallDiamond)
